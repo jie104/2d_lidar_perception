@@ -11,6 +11,8 @@
 #include <sensor_msgs/LaserScan.h>
 #include  <cmath>
 #include <glog/logging.h>
+#include <Eigen/Core>
+#include <geometry_msgs/PoseArray.h>
 
 namespace perception_module{
 
@@ -25,35 +27,43 @@ struct InstallPara{
 };
 
 struct RadarPointInfo{
-    Eigen::Vector2d point;
+    Eigen::Vector2f point;
 };
 
-struct ClusterPoint{
+
+struct ClusterPoint {
     int min_index;
     float min_index_range;
     int max_index;
     float max_index_range;
+    Eigen::Vector2f mean;
     std::vector<RadarPointInfo> infos;
 
-    Eigen::Vector2d computeCenterPoint() {
-        Eigen::Vector2d center_point;
+    //计算聚类点平均值
+    Eigen::Vector2f computeCenterPoint() {
+        Eigen::Vector2f center_point;
         center_point.setZero();
         for (auto &info:infos) {
             center_point += info.point;
         }
         if (infos.size()) {
-            center_point = center_point * (1/(double) infos.size());
+            mean = center_point * (1/(double) infos.size());
+        }else{
+            mean.setZero();
         }
-        return center_point;
+        return mean;
     }
 };
+
 typedef std::shared_ptr<ClusterPoint> ClusterPoint_Ptr;
 
 
 template <class ScanType>
 class laser_detect_pallet {
 public:
-    laser_detect_pallet(InstallPara &install_para);
+
+    laser_detect_pallet(InstallPara &install_para,Eigen::Vector3f &pallet_pose_in_world,
+                        Eigen::Vector3f &car_pose_in_world);
     ~laser_detect_pallet(){}
 
     void computeCircleInfo(ScanType &scan);
@@ -72,8 +82,22 @@ public:
 
     void dilateClusterBoarder(ScanType &scan,ClusterPoint_Ptr& cluster,int& cluster_index,int dilate_size,int direction = 1);
 
+    void getRackPointPair(std::vector<ClusterPoint_Ptr> &clusters,
+                          std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points);
+
+    Eigen::Vector3f getDetectPose(std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points);
+
+    void pubPose(ScanType &scan,Eigen::Vector3f &pose);
+
+    //模板类模版函数初始化
+    template<class  Quaternion>
+    void EulerToQuaternion(double yaw, double roll, double pitch, Quaternion &quaternion_);
+
+
 
 private:
+    void combineClusters(std::vector<ClusterPoint_Ptr> &clusters);
+
     std::vector<double> check_rack_circle_;
     const double check_dist_offset_ = 0.2;
     const double radius_thresh_ = 5.0;//计算允许过滤的最远距离,单位m
@@ -81,16 +105,20 @@ private:
     const double dilate_cluster_angle_offset = 1.0*M_PI/180.0;
     const double dilate_cluster_dist_thresh = 0.03;
     const double low_inten_thresh = 50;
+    const double rack_length_=2.2;  //todo:待确定
+    const double rack_length_thresh_=0.03;   //todo:待确定
+    const int detect_count_=10; //识别次数
+    int cur_count_;
 
-
-    //雷达安装位置
-    double laser_coord_x_;
-    double laser_coord_y_;
-    double laser_coord_yaw_;
     ros::NodeHandle node_;
     ros::Subscriber scan_sub_;
+    ros::Publisher pallet_pose_pub_;
+
     InstallPara install_para_;
 
+    Eigen::Vector3f pallet_pose_in_world_;
+    Eigen::Vector3f car_pose_in_world_;
+    std::vector<Eigen::Vector3f> detect_pallet_poses_;
 
 };
 }

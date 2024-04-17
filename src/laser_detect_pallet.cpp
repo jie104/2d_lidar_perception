@@ -5,10 +5,15 @@
 
 namespace perception_module{
     template <class ScanType>
-    laser_detect_pallet<ScanType>::laser_detect_pallet(InstallPara &install_para)
-        : install_para_(install_para){
+    laser_detect_pallet<ScanType>::laser_detect_pallet(InstallPara &install_para,
+                           Eigen::Vector3f &pallet_pose_in_world,Eigen::Vector3f &car_pose_in_world)
+        :install_para_(install_para)
+        ,pallet_pose_in_world_(pallet_pose_in_world)
+        ,car_pose_in_world_(car_pose_in_world){
         scan_sub_ = node_.subscribe("scan", 5, &laser_detect_pallet::scanCallback, this);
+        pallet_pose_pub_ = node_.advertise<geometry_msgs::PoseArray>("poses", 5);
 
+        cur_count_=0;
     }
 
     template <class ScanType>
@@ -23,9 +28,90 @@ namespace perception_module{
         std::vector<ClusterPoint_Ptr> clusters;
         extractClusters(scan, points_state, clusters);
         dilateClusters(scan, clusters);
+        for(auto& cluster:clusters){
+            cluster->computeCenterPoint();  //计算货架腿的聚点平均值
+        }
+        combineClusters(clusters);  //将靠得较近的点云进一步组合，求聚点平均值
 
+        std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> rack_points;
+
+        getRackPointPair(clusters,rack_points); //校验聚点距离，通过将均值点对放入容器
+        if(cur_count_ < detect_count_){
+            ++cur_count_;
+            Eigen::Vector3f detect_pose;
+            detect_pose= getDetectPose(rack_points);
+            if(detect_pose.norm()!=0){
+                detect_pallet_poses_.emplace_back(detect_pose);
+            }
+        }else{
+            int size=detect_pallet_poses_.size();
+            if(size>3){
+                Eigen::Vector3f true_pose;
+                for(const auto pose:detect_pallet_poses_){
+                    true_pose+=pose;
+                }
+                true_pose=true_pose/size;
+
+
+                pubPose(scan,true_pose);
+
+
+            }
+        }
+    }
+
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::pubPose(ScanType &scan,Eigen::Vector3f &true_pose){
+        geometry_msgs::PoseArray pose_array;
+        pose_array.header = scan->header;
+
+        pose_array.poses.emplace_back();
+        pose_array.poses.back().position.x = true_pose[0];
+        pose_array.poses.back().position.y = true_pose[1];
+        EulerToQuaternion(true_pose[2], 0, 0,pose_array.poses.back().orientation);
+
+        pallet_pose_pub_.publish(pose_array);
 
     }
+
+    template <class ScanType>
+    template <class Quaternion>
+    void laser_detect_pallet<ScanType>::EulerToQuaternion(double yaw, double roll, double pitch, Quaternion &quaternion_) {
+        double cos_yaw_2 = cos(yaw / 2.0);
+        double sin_yaw_2 = sin(yaw / 2.0);
+        double cos_roll_2 = cos(roll / 2.0);
+        double sin_roll_2 = sin(roll / 2.0);
+        double cos_pitch_2 = cos(pitch / 2.0);
+        double sin_pitch_2 = sin(pitch / 2.0);
+        quaternion_.w = cos_yaw_2 * cos_roll_2 * cos_pitch_2 + sin_yaw_2 * sin_roll_2 * sin_pitch_2;
+        quaternion_.x = cos_yaw_2 * sin_roll_2 * cos_pitch_2 + sin_yaw_2 * cos_roll_2 * sin_pitch_2;
+        quaternion_.y = cos_yaw_2 * cos_roll_2 * sin_pitch_2 - sin_yaw_2 * sin_roll_2 * cos_pitch_2;
+        quaternion_.z = sin_yaw_2 * cos_roll_2 * cos_pitch_2 - cos_yaw_2 * sin_roll_2 * sin_pitch_2;
+    }
+
+
+
+    template <class ScanType>
+    Eigen::Vector3f laser_detect_pallet<ScanType>::getDetectPose(std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points){
+
+    }
+
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::getRackPointPair(std::vector<ClusterPoint_Ptr> &clusters,
+                     std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points){
+        int size=clusters.size();
+        for(int i=0;i<size;i++){
+            Eigen::Vector2f first=clusters[i]->mean;
+            for(int j=i+1;j<size;j++){
+                Eigen::Vector2f second=clusters[j]->mean;
+                float length=(first-second).norm();
+                if(std::fabs(length-rack_length_) <= rack_length_thresh_){
+                    rack_points.emplace_back(std::make_pair(first,second));
+                }
+            }
+        }
+    }
+
 
     template <class ScanType>
     void laser_detect_pallet<ScanType>::filterScanTrailingPoint(ScanType& scan,std::vector<bool> &points_state,int step,double min_thresh) {//注意，这里如果拖尾部分有一个点被滤掉了，那其他点则无法识别出为拖尾点了，因为，这里有距离判断
@@ -81,7 +167,7 @@ namespace perception_module{
                 clusters.back()->max_index = index;
                 clusters.back()->max_index_range = range;
                 auto &info = clusters.back()->infos.back();
-                info.point = Eigen::Vector2d(range * cos(curr_angle), range * sin(curr_angle));
+                info.point = Eigen::Vector2f (range * cos(curr_angle), range * sin(curr_angle));
             }
             index++;
             curr_angle += angle_incre;
@@ -124,7 +210,7 @@ namespace perception_module{
                 cluster->infos.emplace_back();
                 auto &info = cluster->infos.back();
                 double curr_angle = first_edge_index * increment + min_angle;
-                info.point = Eigen::Vector2d(range * cos(curr_angle), range * sin(curr_angle));
+                info.point = Eigen::Vector2f(range * cos(curr_angle), range * sin(curr_angle));
             }
         }
     }
@@ -140,7 +226,8 @@ namespace perception_module{
 
         //将以雷达安装位置为原点的坐标系上的点云转化到转化到标准坐标系上，即原点(0,0),即将雷达坐标系的点云转到车体中心
         Eigen::Affine2f laser_tf(
-                Eigen::Translation2f(laser_coord_x_, laser_coord_y_) * Eigen::Rotation2Df(laser_coord_yaw_));
+                Eigen::Translation2f(install_para_.laser_coord_x, install_para_.laser_coord_y)
+                    * Eigen::Rotation2Df(install_para_.laser_coord_yaw));
         Eigen::Vector2f center_pose = laser_tf.inverse() * Eigen::Vector2f(0, 0);   //车体中心在雷达坐标系下的坐标
         double a_0 = center_pose[0];
         double b_0 = center_pose[1];
@@ -206,6 +293,29 @@ namespace perception_module{
             }
         }
     }
+
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::combineClusters(std::vector<ClusterPoint_Ptr> &clusters){
+        if (clusters.size()) {
+            std::vector<ClusterPoint_Ptr> bk_clusters;
+            ClusterPoint_Ptr curr_cluster = clusters[0];
+            bk_clusters.push_back(curr_cluster);
+            int cluster_size = clusters.size();
+            for (int i = 1; i < cluster_size; ++i) {
+                if((curr_cluster->mean - clusters[i]->mean).norm()<0.05f){
+                    for (auto &info : clusters[i]->infos) {
+                        curr_cluster->infos.push_back(info);
+                    }
+                    curr_cluster->computeCenterPoint();
+                }else{
+                    curr_cluster = clusters[i];
+                    bk_clusters.push_back(curr_cluster);
+                }
+            }
+            clusters.swap(bk_clusters);
+        }
+    }
+
 
     //显式实例化
     template class perception_module::laser_detect_pallet<sensor_msgs::LaserScanPtr>;
