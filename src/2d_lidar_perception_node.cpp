@@ -20,10 +20,10 @@ int main(int argc,char **argv){
         {-1.57,1.57,1,2,3,0.1,0.1};
 
     ///slam发送的栈板位姿
-    Eigen::Vector3f pallet_pose_in_world(1,2,3);
+    Eigen::Vector3d pallet_pose_in_world(1,2,3);
 
     ///车体位姿
-    Eigen::Vector3f car_pose_in_world(2,3,4);
+    Eigen::Vector3d car_pose_in_world(2,3,4);
 
     perception_module::laser_detect_pallet<sensor_msgs::LaserScanPtr>
             perception(install_para,pallet_pose_in_world,car_pose_in_world);

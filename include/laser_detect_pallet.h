@@ -27,7 +27,7 @@ struct InstallPara{
 };
 
 struct RadarPointInfo{
-    Eigen::Vector2f point;
+    Eigen::Vector2d point;
 };
 
 
@@ -36,12 +36,12 @@ struct ClusterPoint {
     float min_index_range;
     int max_index;
     float max_index_range;
-    Eigen::Vector2f mean;
+    Eigen::Vector2d mean;
     std::vector<RadarPointInfo> infos;
 
     //计算聚类点平均值
-    Eigen::Vector2f computeCenterPoint() {
-        Eigen::Vector2f center_point;
+    Eigen::Vector2d computeCenterPoint() {
+        Eigen::Vector2d center_point;
         center_point.setZero();
         for (auto &info:infos) {
             center_point += info.point;
@@ -62,8 +62,8 @@ template <class ScanType>
 class laser_detect_pallet {
 public:
 
-    laser_detect_pallet(InstallPara &install_para,Eigen::Vector3f &pallet_pose_in_world,
-                        Eigen::Vector3f &car_pose_in_world);
+    laser_detect_pallet(InstallPara &install_para,Eigen::Vector3d &pallet_pose_in_world,
+                        Eigen::Vector3d &car_pose_in_world);
     ~laser_detect_pallet(){}
 
     void computeCircleInfo(ScanType &scan);
@@ -83,20 +83,29 @@ public:
     void dilateClusterBoarder(ScanType &scan,ClusterPoint_Ptr& cluster,int& cluster_index,int dilate_size,int direction = 1);
 
     void getRackPointPair(std::vector<ClusterPoint_Ptr> &clusters,
-                          std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points);
+                          std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_points);
 
-    Eigen::Vector3f getDetectPose(std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points);
+    Eigen::Vector3d getDetectPose(std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_points);
 
-    void pubPose(ScanType &scan,Eigen::Vector3f &pose);
+    void pubPose(ScanType &scan,Eigen::Vector3d &pose);
 
     //模板类模版函数初始化
     template<class  Quaternion>
     void EulerToQuaternion(double yaw, double roll, double pitch, Quaternion &quaternion_);
 
+    Eigen::Vector3d world_to_laser(const Eigen::Vector3d &pose_in_world);
 
 
 private:
     void combineClusters(std::vector<ClusterPoint_Ptr> &clusters);
+//    double Deg2Rad(double degree){
+//        return degree*M_PI/180;
+//    }
+//
+//    double Rad2Deg(double rad){
+//        return rad*180/M_PI;
+//    }
+
 
     std::vector<double> check_rack_circle_;
     const double check_dist_offset_ = 0.2;
@@ -107,6 +116,10 @@ private:
     const double low_inten_thresh = 50;
     const double rack_length_=2.2;  //todo:待确定
     const double rack_length_thresh_=0.03;   //todo:待确定
+    const double range_detect_thresh_=0.05; //单位m,todo:待确定
+    const double angle_detect_thresh_=0.0871;   //对应sin5°，todo:待确定
+    const int min_detect_point_num_=3;
+
     const int detect_count_=10; //识别次数
     int cur_count_;
 
@@ -116,10 +129,9 @@ private:
 
     InstallPara install_para_;
 
-    Eigen::Vector3f pallet_pose_in_world_;
-    Eigen::Vector3f car_pose_in_world_;
-    std::vector<Eigen::Vector3f> detect_pallet_poses_;
-
+    Eigen::Vector3d pallet_pose_in_world_;
+    Eigen::Vector3d car_pose_in_world_;
+    std::vector<Eigen::Vector3d> detect_pallet_poses_;
 };
 }
 

@@ -2,11 +2,12 @@
 // Created by zxj on 2024/4/16.
 //
 #include "../include/laser_detect_pallet.h"
+#include <cmath>
 
 namespace perception_module{
     template <class ScanType>
     laser_detect_pallet<ScanType>::laser_detect_pallet(InstallPara &install_para,
-                           Eigen::Vector3f &pallet_pose_in_world,Eigen::Vector3f &car_pose_in_world)
+                           Eigen::Vector3d &pallet_pose_in_world,Eigen::Vector3d &car_pose_in_world)
         :install_para_(install_para)
         ,pallet_pose_in_world_(pallet_pose_in_world)
         ,car_pose_in_world_(car_pose_in_world){
@@ -22,46 +23,80 @@ namespace perception_module{
             computeCircleInfo(scan);
         }
         std::vector<bool> points_state(scan->ranges.size(),true);
+
         filterOutBoarderPoint(scan, install_para_);
+
         filterLowIntenPoint(scan);
+
         filterScanTrailingPoint(scan,points_state,2,0.02);
+
         std::vector<ClusterPoint_Ptr> clusters;
+
         extractClusters(scan, points_state, clusters);
+
         dilateClusters(scan, clusters);
+
         for(auto& cluster:clusters){
             cluster->computeCenterPoint();  //计算货架腿的聚点平均值
         }
         combineClusters(clusters);  //将靠得较近的点云进一步组合，求聚点平均值
 
-        std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> rack_points;
+        std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> rack_point_pairs;
 
-        getRackPointPair(clusters,rack_points); //校验聚点距离，通过将均值点对放入容器
+        getRackPointPair(clusters,rack_point_pairs); //校验聚点距离，通过将均值点对放入容器
         if(cur_count_ < detect_count_){
             ++cur_count_;
-            Eigen::Vector3f detect_pose;
-            detect_pose= getDetectPose(rack_points);
+            Eigen::Vector3d detect_pose=getDetectPose(rack_point_pairs);
             if(detect_pose.norm()!=0){
                 detect_pallet_poses_.emplace_back(detect_pose);
             }
         }else{
             int size=detect_pallet_poses_.size();
-            if(size>3){
-                Eigen::Vector3f true_pose;
+            if(size > min_detect_point_num_){
+                Eigen::Vector3d true_pose_in_world;
                 for(const auto pose:detect_pallet_poses_){
-                    true_pose+=pose;
+                    true_pose_in_world+=pose;
                 }
-                true_pose=true_pose/size;
+                true_pose_in_world=true_pose_in_world/size;
+                Eigen::Vector3d detect_pose_in_lidar=world_to_laser(true_pose_in_world);
 
+                pubPose(scan,detect_pose_in_lidar);
 
-                pubPose(scan,true_pose);
-
-
+                cur_count_=0;
+                detect_pallet_poses_.clear();
+            }else{
+                LOG(INFO)  << "can not detect enough time!!! " << "size: " << size;
             }
+
         }
     }
 
+    template <class TypeScan>
+    Eigen::Vector3d laser_detect_pallet<TypeScan>::world_to_laser(const Eigen::Vector3d &pose_in_world){
+        Eigen::Vector3d detect_pose;
+        ///todo:此时需要重新订阅一次car_pose_in_world,实时定位
+        Eigen::Affine2d car2world_tf(
+                Eigen::Translation2d(car_pose_in_world_.x(), car_pose_in_world_.y())
+                * Eigen::Rotation2Dd(car_pose_in_world_.z()));
+
+        //世界坐标系到车体中心
+        detect_pose.head(2) = car2world_tf.inverse() * Eigen::Vector2d(detect_pose[0],detect_pose[1]);
+        detect_pose[2] = detect_pose[2] - car_pose_in_world_.z(); //todo 角度转换待确定
+
+        Eigen::Affine2d laser2Car_tf(
+                Eigen::Translation2d(install_para_.laser_coord_x, install_para_.laser_coord_y)
+                * Eigen::Rotation2Dd(install_para_.laser_coord_yaw));
+
+        //车体中心到世界坐标系
+        detect_pose.head(2) = laser2Car_tf.inverse() * Eigen::Vector2d(detect_pose[0],detect_pose[1]); //防止混淆
+        detect_pose[2] = detect_pose[2] -install_para_.laser_coord_yaw;//todo 角度转换待确定
+
+        return detect_pose;
+    }
+
+
     template <class ScanType>
-    void laser_detect_pallet<ScanType>::pubPose(ScanType &scan,Eigen::Vector3f &true_pose){
+    void laser_detect_pallet<ScanType>::pubPose(ScanType &scan,Eigen::Vector3d &true_pose){
         geometry_msgs::PoseArray pose_array;
         pose_array.header = scan->header;
 
@@ -90,20 +125,54 @@ namespace perception_module{
     }
 
 
-
     template <class ScanType>
-    Eigen::Vector3f laser_detect_pallet<ScanType>::getDetectPose(std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points){
+    Eigen::Vector3d laser_detect_pallet<ScanType>::getDetectPose(std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs){
+        const int segment_num=4;
+        for(const auto &rack_point_pair:rack_point_pairs){
+            for(int i=1;i<segment_num;i++) {
+                Eigen::Vector3d detect_pose;
+                detect_pose.head(2) = (rack_point_pair.first + rack_point_pair.second) * i / segment_num;
+                detect_pose[2] = std::atan2(rack_point_pair.second.x() - rack_point_pair.first.x(),
+                                            rack_point_pair.first.y() -
+                                            rack_point_pair.second.y());   //atan(x2-x1,y1-y2)
+                LOG(INFO) << "detect pose in lidar: " << detect_pose.transpose();
 
+                Eigen::Affine2d laser2Car_tf(
+                        Eigen::Translation2d(install_para_.laser_coord_x, install_para_.laser_coord_y)
+                        * Eigen::Rotation2Dd(install_para_.laser_coord_yaw));
+
+                //将激光点云转化到车体中心坐标系
+                detect_pose.head(2) = laser2Car_tf * Eigen::Vector2d(detect_pose[0],detect_pose[1]); //防止混淆
+                detect_pose[2] = detect_pose[2] + install_para_.laser_coord_yaw;//todo 角度转换待确定
+
+                Eigen::Affine2d car2world_tf(
+                        Eigen::Translation2d(car_pose_in_world_.x(), car_pose_in_world_.y())
+                        * Eigen::Rotation2Dd(car_pose_in_world_.z()));
+
+                //车体中心到世界坐标系
+                detect_pose.head(2) = car2world_tf * Eigen::Vector2d(detect_pose[0],detect_pose[1]);
+                detect_pose[2] = detect_pose[2] + car_pose_in_world_.z(); //todo 角度转换待确定
+
+                Eigen::Vector3d detect_direct(std::cos(detect_pose[2]), std::sin(detect_pose[2]),0);
+                Eigen::Vector3d locate_direct(std::cos(car_pose_in_world_.z()), std::sin(car_pose_in_world_.z()),0);
+
+                if ((detect_pose.head(2) - pallet_pose_in_world_.head(2)).norm() <= range_detect_thresh_ &&
+                        detect_direct.cross(locate_direct).norm() <= angle_detect_thresh_) { //cross叉乘仅支持三维
+                    return detect_pose;
+                }
+            }
+        }
+        return Eigen::Vector3d(0,0,0);
     }
 
     template <class ScanType>
     void laser_detect_pallet<ScanType>::getRackPointPair(std::vector<ClusterPoint_Ptr> &clusters,
-                     std::vector<std::pair<Eigen::Vector2f,Eigen::Vector2f>> &rack_points){
+                     std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_points){
         int size=clusters.size();
         for(int i=0;i<size;i++){
-            Eigen::Vector2f first=clusters[i]->mean;
+            Eigen::Vector2d first=clusters[i]->mean;
             for(int j=i+1;j<size;j++){
-                Eigen::Vector2f second=clusters[j]->mean;
+                Eigen::Vector2d second=clusters[j]->mean;
                 float length=(first-second).norm();
                 if(std::fabs(length-rack_length_) <= rack_length_thresh_){
                     rack_points.emplace_back(std::make_pair(first,second));
@@ -167,7 +236,7 @@ namespace perception_module{
                 clusters.back()->max_index = index;
                 clusters.back()->max_index_range = range;
                 auto &info = clusters.back()->infos.back();
-                info.point = Eigen::Vector2f (range * cos(curr_angle), range * sin(curr_angle));
+                info.point = Eigen::Vector2d (range * cos(curr_angle), range * sin(curr_angle));
             }
             index++;
             curr_angle += angle_incre;
@@ -210,7 +279,7 @@ namespace perception_module{
                 cluster->infos.emplace_back();
                 auto &info = cluster->infos.back();
                 double curr_angle = first_edge_index * increment + min_angle;
-                info.point = Eigen::Vector2f(range * cos(curr_angle), range * sin(curr_angle));
+                info.point = Eigen::Vector2d(range * cos(curr_angle), range * sin(curr_angle));
             }
         }
     }
@@ -225,10 +294,10 @@ namespace perception_module{
         double angle = min_angle;
 
         //将以雷达安装位置为原点的坐标系上的点云转化到转化到标准坐标系上，即原点(0,0),即将雷达坐标系的点云转到车体中心
-        Eigen::Affine2f laser_tf(
-                Eigen::Translation2f(install_para_.laser_coord_x, install_para_.laser_coord_y)
-                    * Eigen::Rotation2Df(install_para_.laser_coord_yaw));
-        Eigen::Vector2f center_pose = laser_tf.inverse() * Eigen::Vector2f(0, 0);   //车体中心在雷达坐标系下的坐标
+        Eigen::Affine2d laser_tf(
+                Eigen::Translation2d(install_para_.laser_coord_x, install_para_.laser_coord_y)
+                    * Eigen::Rotation2Dd(install_para_.laser_coord_yaw));
+        Eigen::Vector2d center_pose = laser_tf.inverse() * Eigen::Vector2d(0, 0);   //车体中心在雷达坐标系下的坐标
         double a_0 = center_pose[0];
         double b_0 = center_pose[1];
 
