@@ -3,6 +3,7 @@
 //
 #include "../include/laser_detect_pallet.h"
 #include <cmath>
+#define DEBUG_MODE
 
 namespace perception_module{
     template <class ScanType>
@@ -11,8 +12,11 @@ namespace perception_module{
         :install_para_(install_para)
         ,pallet_pose_in_world_(pallet_pose_in_world)
         ,car_pose_in_world_(car_pose_in_world){
-        scan_sub_ = node_.subscribe("scan", 5, &laser_detect_pallet::scanCallback, this);
+        scan_sub_ = node_.subscribe("/oradar_node/scan", 5, &laser_detect_pallet::scanCallback, this);
         pallet_pose_pub_ = node_.advertise<geometry_msgs::PoseArray>("poses", 5);
+        clusters_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_points",5);
+        cluster_mean_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_mean",5);
+
 
         cur_count_=0;
     }
@@ -41,9 +45,27 @@ namespace perception_module{
         }
         combineClusters(clusters);  //将靠得较近的点云进一步组合，求聚点平均值
 
+#ifdef DEBUG_MODE
+        pubClusterPoints(scan,clusters);
+
+#endif
+
         std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> rack_point_pairs;
 
         getRackPointPair(clusters,rack_point_pairs); //校验聚点距离，通过将均值点对放入容器
+
+#ifdef DEBUG_MODE
+        pubClusterMean(scan,rack_point_pairs);
+
+        std::vector<Eigen::Vector3d> detect_poses=getDectectPoses(rack_point_pairs);
+        if(detect_poses.empty()){
+            LOG(INFO) << "can not detect!!!";
+        }else {
+            LOG_EVERY_N(INFO,10) << "detect pose num: " << detect_poses.size();
+        }
+        pubPoses(scan,detect_poses);
+
+#else
         if(cur_count_ < detect_count_){
             ++cur_count_;
             Eigen::Vector3d detect_pose=getDetectPose(rack_point_pairs);
@@ -69,6 +91,8 @@ namespace perception_module{
             }
 
         }
+
+#endif
     }
 
     template <class TypeScan>
@@ -110,6 +134,54 @@ namespace perception_module{
     }
 
     template <class ScanType>
+    void laser_detect_pallet<ScanType>::pubPoses(ScanType &scan,std::vector<Eigen::Vector3d> &true_poses){
+        geometry_msgs::PoseArray pose_array;
+        pose_array.header = scan->header;
+        for(auto true_pose:true_poses){
+            pose_array.poses.emplace_back();
+            pose_array.poses.back().position.x = true_pose[0];
+            pose_array.poses.back().position.y = true_pose[1];
+            EulerToQuaternion(true_pose[2], 0, 0,pose_array.poses.back().orientation);
+        }
+
+        pallet_pose_pub_.publish(pose_array);
+
+    }
+
+    template<class ScanType>
+    void laser_detect_pallet<ScanType>::pubClusterPoints(ScanType &scan,const std::vector<ClusterPoint_Ptr> &clusters){
+        sensor_msgs::PointCloud cluster_points;
+        cluster_points.header=scan->header;
+        for(const auto cluster:clusters){
+            for(const auto &point:cluster->infos){
+                cluster_points.points.emplace_back();
+                cluster_points.points.back().x=point.point.x();
+                cluster_points.points.back().y=point.point.y();
+            }
+
+        }
+        clusters_pub_.publish(cluster_points);
+    }
+
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::pubClusterMean(ScanType &scan,const std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs){
+        sensor_msgs::PointCloud points;
+        points.header=scan->header;
+        for(const auto pair:rack_point_pairs){
+            points.points.emplace_back();
+            points.points.back().x=pair.first.x();
+            points.points.back().y=pair.first.y();
+
+            points.points.emplace_back();
+            points.points.back().x=pair.second.x();
+            points.points.back().y=pair.second.y();
+        }
+
+        cluster_mean_pub_.publish(points);
+    }
+
+
+    template <class ScanType>
     template <class Quaternion>
     void laser_detect_pallet<ScanType>::EulerToQuaternion(double yaw, double roll, double pitch, Quaternion &quaternion_) {
         double cos_yaw_2 = cos(yaw / 2.0);
@@ -126,16 +198,45 @@ namespace perception_module{
 
 
     template <class ScanType>
-    Eigen::Vector3d laser_detect_pallet<ScanType>::getDetectPose(std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs){
-        const int segment_num=4;
-        for(const auto &rack_point_pair:rack_point_pairs){
-            for(int i=1;i<segment_num;i++) {
+    std::vector<Eigen::Vector3d> laser_detect_pallet<ScanType>::getDectectPoses(std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs) {
+        const int segment_num = 4;
+        const double segment_step=1.0/segment_num;
+        std::vector<Eigen::Vector3d> detect_poses;
+        for (const auto &rack_point_pair:rack_point_pairs) {
+            for (int i = 1; i < segment_num; i++) {
                 Eigen::Vector3d detect_pose;
-                detect_pose.head(2) = (rack_point_pair.first + rack_point_pair.second) * i / segment_num;
+                double step_sum=i*segment_step;
+                detect_pose[0]=(1-step_sum)*rack_point_pair.first.x()+step_sum*rack_point_pair.second.x();
+                detect_pose[1]=(1-step_sum)*rack_point_pair.first.y()+step_sum*rack_point_pair.second.y();
                 detect_pose[2] = std::atan2(rack_point_pair.second.x() - rack_point_pair.first.x(),
                                             rack_point_pair.first.y() -
                                             rack_point_pair.second.y());   //atan(x2-x1,y1-y2)
-                LOG(INFO) << "detect pose in lidar: " << detect_pose.transpose();
+//                LOG(INFO) << "detect pose in lidar: " << detect_pose.transpose();
+                Eigen::Vector3d dir(std::cos(detect_pose[2]), std::sin(detect_pose[2]), 0);
+                Eigen::Vector3d zero_dir(std::cos(0), std::sin(0), 0);
+                if (dir.cross(zero_dir).norm() < angle_detect_thresh_) {
+                    detect_poses.emplace_back(detect_pose);
+                }
+            }
+        }
+        return detect_poses;
+    }
+
+    template <class ScanType>
+    Eigen::Vector3d laser_detect_pallet<ScanType>::getDetectPose(std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs){
+        const int segment_num = 4;
+        const double segment_step=1.0/segment_num;
+        std::vector<Eigen::Vector3d> detect_poses;
+        for (const auto &rack_point_pair:rack_point_pairs) {
+            for (int i = 1; i < segment_num; i++) {
+                Eigen::Vector3d detect_pose;
+                double step_sum=i*segment_step;
+                detect_pose[0]=(1-step_sum)*rack_point_pair.first.x()+step_sum*rack_point_pair.second.x();
+                detect_pose[1]=(1-step_sum)*rack_point_pair.first.y()+step_sum*rack_point_pair.second.y();
+                detect_pose[2] = std::atan2(rack_point_pair.second.x() - rack_point_pair.first.x(),
+                                            rack_point_pair.first.y() -
+                                            rack_point_pair.second.y());   //atan(x2-x1,y1-y2)
+//                LOG(INFO) << "detect pose in lidar: " << detect_pose.transpose();
 
                 Eigen::Affine2d laser2Car_tf(
                         Eigen::Translation2d(install_para_.laser_coord_x, install_para_.laser_coord_y)
@@ -162,7 +263,9 @@ namespace perception_module{
                 }
             }
         }
+        LOG(INFO) << "1111111111111 " << " can not detect !!!";
         return Eigen::Vector3d(0,0,0);
+
     }
 
     template <class ScanType>

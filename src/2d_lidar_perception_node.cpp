@@ -13,7 +13,7 @@ int main(int argc,char **argv){
 
     LOG(INFO) << "hello world!";
 
-    ros::init(argc, argv, "2d_lidar_perception");//ros初始化
+    ros::init(argc, argv, "laser_perception");//ros初始化
 
     ///雷达信息
     perception_module::InstallPara install_para

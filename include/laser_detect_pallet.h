@@ -13,6 +13,7 @@
 #include <glog/logging.h>
 #include <Eigen/Core>
 #include <geometry_msgs/PoseArray.h>
+#include <sensor_msgs/PointCloud.h>
 
 namespace perception_module{
 
@@ -95,6 +96,14 @@ public:
 
     Eigen::Vector3d world_to_laser(const Eigen::Vector3d &pose_in_world);
 
+    std::vector<Eigen::Vector3d> getDectectPoses(std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs);
+
+    void pubPoses(ScanType &scan,std::vector<Eigen::Vector3d> &true_poses);
+
+    void pubClusterPoints(ScanType &scan,const std::vector<ClusterPoint_Ptr> &clusters);
+
+    void pubClusterMean(ScanType &scan,const std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs);
+
 
 private:
     void combineClusters(std::vector<ClusterPoint_Ptr> &clusters);
@@ -114,7 +123,7 @@ private:
     const double dilate_cluster_angle_offset = 1.0*M_PI/180.0;
     const double dilate_cluster_dist_thresh = 0.03;
     const double low_inten_thresh = 50;
-    const double rack_length_=2.2;  //todo:待确定
+    const double rack_length_=1.52;  //单位m,todo:待确定
     const double rack_length_thresh_=0.03;   //todo:待确定
     const double range_detect_thresh_=0.05; //单位m,todo:待确定
     const double angle_detect_thresh_=0.0871;   //对应sin5°，todo:待确定
@@ -126,6 +135,8 @@ private:
     ros::NodeHandle node_;
     ros::Subscriber scan_sub_;
     ros::Publisher pallet_pose_pub_;
+    ros::Publisher clusters_pub_;
+    ros::Publisher cluster_mean_pub_;
 
     InstallPara install_para_;
 
