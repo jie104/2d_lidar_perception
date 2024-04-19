@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>2d_lidar_perception</name>
+  <name>laser_perception</name>
   <version>0.0.0</version>
   <description>The 2d_lidar_perception package</description>
 
