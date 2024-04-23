@@ -11,7 +11,20 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
+    message_generation
 )
+
+
+add_service_files(
+        FILES
+        status.srv
+)
+
+generate_messages(
+        DEPENDENCIES
+        std_msgs
+)
+
 
 catkin_package(
         INCLUDE_DIRS include
@@ -30,6 +43,18 @@ add_library(laser_detect_pallet_lib
 
 
 add_executable(${PROJECT_NAME}_node src/2d_lidar_perception_node.cpp  )
+
+add_executable(Client src/client.cpp)
+
+
+add_dependencies(Client ${PROJECT_NAME}_gencpp)
+
+
+target_link_libraries(Client
+        ${catkin_LIBRARIES}
+        )
+
+
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the

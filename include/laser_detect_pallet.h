@@ -14,6 +14,7 @@
 #include <Eigen/Core>
 #include <geometry_msgs/PoseArray.h>
 #include <sensor_msgs/PointCloud.h>
+#include "../../../devel/include/laser_perception/status.h"
 
 namespace perception_module{
 
@@ -104,6 +105,7 @@ public:
 
     void pubClusterMean(ScanType &scan,const std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs);
 
+    bool doReq(laser_perception::status::Request& req,laser_perception::status::Response& resp);
 
 private:
     void combineClusters(std::vector<ClusterPoint_Ptr> &clusters);
@@ -115,6 +117,9 @@ private:
 //        return rad*180/M_PI;
 //    }
 
+
+    bool cur_detect_status_;
+    bool is_detect_;
 
     std::vector<double> check_rack_circle_;
     const double check_dist_offset_ = 0.2;
@@ -137,6 +142,7 @@ private:
     ros::Publisher pallet_pose_pub_;
     ros::Publisher clusters_pub_;
     ros::Publisher cluster_mean_pub_;
+    ros::ServiceServer server_;
 
     InstallPara install_para_;
 

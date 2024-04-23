@@ -1,0 +1,5 @@
+# 客户端请求时发送的转态
+bool request_status
+---
+# 服务器响应发送的状态
+bool do_request_status

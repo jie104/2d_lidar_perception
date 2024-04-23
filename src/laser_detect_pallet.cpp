@@ -12,17 +12,41 @@ namespace perception_module{
         :install_para_(install_para)
         ,pallet_pose_in_world_(pallet_pose_in_world)
         ,car_pose_in_world_(car_pose_in_world){
+
+        server_=node_.advertiseService("detect_status",&laser_detect_pallet::doReq,this);
+
+
         scan_sub_ = node_.subscribe("/oradar_node/scan", 5, &laser_detect_pallet::scanCallback, this);
         pallet_pose_pub_ = node_.advertise<geometry_msgs::PoseArray>("poses", 5);
         clusters_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_points",5);
         cluster_mean_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_mean",5);
 
-
+        cur_detect_status_= false;
+        is_detect_= false;
         cur_count_=0;
     }
 
     template <class ScanType>
+    bool laser_detect_pallet<ScanType>::doReq(laser_perception::status::Request& req,
+                                              laser_perception::status::Response& resp) {
+        cur_detect_status_ = req.request_status;
+
+//        if (is_detect_) {
+            resp.do_request_status = true;
+            return true;
+//        } else {
+//            return false;
+//        }
+    }
+
+    template <class ScanType>
     void laser_detect_pallet<ScanType>::scanCallback(ScanType scan) {
+        if(!cur_detect_status_) {
+            LOG_EVERY_N(INFO,50) << "stop to detect!!! ";
+            return;
+        }
+        LOG_EVERY_N(INFO,50) << " begin to detect!!!";
+
         if(check_rack_circle_.empty()) {
             computeCircleInfo(scan);
         }
@@ -60,9 +84,8 @@ namespace perception_module{
         std::vector<Eigen::Vector3d> detect_poses=getDectectPoses(rack_point_pairs);
         if(detect_poses.empty()){
             LOG(INFO) << "can not detect!!!";
-        }else {
-            LOG_EVERY_N(INFO,10) << "detect pose num: " << detect_poses.size();
         }
+        is_detect_=true;
         pubPoses(scan,detect_poses);
 
 #else
