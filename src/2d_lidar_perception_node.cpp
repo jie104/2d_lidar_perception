@@ -17,10 +17,10 @@ int main(int argc,char **argv){
 
     ///雷达信息
     perception_module::InstallPara install_para
-        {-1.57,1.57,1,2,3,0.1,0.1};
+        {-1.57,1.57,0.4,0,-1.57,0.1,0.1};
 
     ///slam发送的栈板位姿
-    Eigen::Vector3d pallet_pose_in_world(1,2,3);
+    Eigen::Vector3d pallet_pose_in_world(0.4,0,3);
 
     ///车体位姿
     Eigen::Vector3d car_pose_in_world(2,3,4);

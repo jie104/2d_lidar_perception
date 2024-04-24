@@ -20,6 +20,7 @@ namespace perception_module{
         pallet_pose_pub_ = node_.advertise<geometry_msgs::PoseArray>("poses", 5);
         clusters_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_points",5);
         cluster_mean_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_mean",5);
+        circle_pub_=node_.advertise<sensor_msgs::PointCloud>("circle_filter",5);
 
         cur_detect_status_= false;
         is_detect_= false;
@@ -71,6 +72,7 @@ namespace perception_module{
 
 #ifdef DEBUG_MODE
         pubClusterPoints(scan,clusters);
+        PubCircle(check_rack_circle_,scan);
 
 #endif
 
@@ -83,7 +85,7 @@ namespace perception_module{
 
         std::vector<Eigen::Vector3d> detect_poses=getDectectPoses(rack_point_pairs);
         if(detect_poses.empty()){
-            LOG(INFO) << "can not detect!!!";
+            LOG_EVERY_N(INFO,50) << "can not detect!!!";
         }
         is_detect_=true;
         pubPoses(scan,detect_poses);
@@ -117,6 +119,26 @@ namespace perception_module{
 
 #endif
     }
+
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::PubCircle(std::vector<double> &check_rack_circle,ScanType scan){
+        sensor_msgs::PointCloud cloud;
+        cloud.header=scan->header;
+        int size=check_rack_circle.size();
+        double angle_min=scan->angle_min;
+        double angle_incre=scan->angle_increment;
+        for (int j=0;j< size;j++){
+            double angle=angle_min+j*angle_incre;
+            auto range=check_rack_circle[j];
+            // LOG(INFO) << "range111111: " << range;
+            Eigen::Vector2d point(range*cos(angle),range*sin(angle));
+            cloud.points.emplace_back();
+            cloud.points.back().x=point.x();
+            cloud.points.back().y=point.y();
+        }
+        circle_pub_.publish(cloud);
+    }
+
 
     template <class TypeScan>
     Eigen::Vector3d laser_detect_pallet<TypeScan>::world_to_laser(const Eigen::Vector3d &pose_in_world){
@@ -237,9 +259,9 @@ namespace perception_module{
 //                LOG(INFO) << "detect pose in lidar: " << detect_pose.transpose();
                 Eigen::Vector3d dir(std::cos(detect_pose[2]), std::sin(detect_pose[2]), 0);
                 Eigen::Vector3d zero_dir(std::cos(0), std::sin(0), 0);
-                if (dir.cross(zero_dir).norm() < angle_detect_thresh_) {
+//                if (dir.cross(zero_dir).norm() < angle_detect_thresh_) {
                     detect_poses.emplace_back(detect_pose);
-                }
+//                }
             }
         }
         return detect_poses;
@@ -313,7 +335,7 @@ namespace perception_module{
         auto& ranges = scan->ranges;
 
         double cos_increment = cos(scan->angle_increment * (double) step * 2.0);
-        double theta_thresh = sin((double) scan->angle_increment * (double) step * 2.0) / sin(0.17);//临界值,用于识别断点
+        double theta_thresh = sin((double) scan->angle_increment * (double) step * 2.0) / sin(0.34);//临界值,用于识别断点
 
         int scan_size = ranges.size() - step;
         for (int i = step; i < scan_size; i++) {

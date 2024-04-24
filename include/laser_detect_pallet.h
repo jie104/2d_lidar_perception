@@ -107,6 +107,8 @@ public:
 
     bool doReq(laser_perception::status::Request& req,laser_perception::status::Response& resp);
 
+    void PubCircle(std::vector<double> &check_rack_circle,ScanType scan);
+
 private:
     void combineClusters(std::vector<ClusterPoint_Ptr> &clusters);
 //    double Deg2Rad(double degree){
@@ -128,8 +130,8 @@ private:
     const double dilate_cluster_angle_offset = 1.0*M_PI/180.0;
     const double dilate_cluster_dist_thresh = 0.03;
     const double low_inten_thresh = 50;
-    const double rack_length_=1.52;  //单位m,todo:待确定
-    const double rack_length_thresh_=0.03;   //todo:待确定
+    const double rack_length_=2.56;  //单位m,todo:待确定
+    const double rack_length_thresh_=0.1;   //todo:待确定
     const double range_detect_thresh_=0.05; //单位m,todo:待确定
     const double angle_detect_thresh_=0.0871;   //对应sin5°，todo:待确定
     const int min_detect_point_num_=3;
@@ -143,6 +145,7 @@ private:
     ros::Publisher clusters_pub_;
     ros::Publisher cluster_mean_pub_;
     ros::ServiceServer server_;
+    ros::Publisher circle_pub_;
 
     InstallPara install_para_;
 
