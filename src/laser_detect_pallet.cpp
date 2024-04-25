@@ -55,9 +55,10 @@ namespace perception_module{
 
         filterOutBoarderPoint(scan, install_para_);
 
-        filterLowIntenPoint(scan);
+//        filterLowIntenPoint(scan);
+        filterNearRangePoints(scan);
 
-        filterScanTrailingPoint(scan,points_state,2,0.02);
+        filterScanTrailingPoint(scan,points_state,3,0.01);
 
         std::vector<ClusterPoint_Ptr> clusters;
 
@@ -70,20 +71,30 @@ namespace perception_module{
         }
         combineClusters(clusters);  //将靠得较近的点云进一步组合，求聚点平均值
 
+        std::vector<PalletInfo_Ptr> pallets;
+
+        detectPose(clusters, pallets); //找出所有托盘位姿及中心，存放在triangles中
+
 #ifdef DEBUG_MODE
-        pubClusterPoints(scan,clusters);
+        pubClusterPoints(scan,pallets);
         PubCircle(check_rack_circle_,scan);
 
 #endif
 
-        std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> rack_point_pairs;
-
-        getRackPointPair(clusters,rack_point_pairs); //校验聚点距离，通过将均值点对放入容器
+//        std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> rack_point_pairs;
+//
+//        getRackPointPair(clusters,rack_point_pairs); //校验聚点距离，通过将均值点对放入容器
 
 #ifdef DEBUG_MODE
-        pubClusterMean(scan,rack_point_pairs);
+        pubClusterMean(scan,pallets);
 
-        std::vector<Eigen::Vector3d> detect_poses=getDectectPoses(rack_point_pairs);
+        std::vector<Eigen::Vector3d> detect_poses;
+        for(const auto& pallet:pallets) {
+            detect_poses.emplace_back();
+            detect_poses.back().head(2)=pallet->mean;
+            detect_poses.back().z()=std::atan2(pallet->direction.y(),pallet->direction.x());
+        }
+
         if(detect_poses.empty()){
             LOG_EVERY_N(INFO,50) << "can not detect!!!";
         }
@@ -118,6 +129,16 @@ namespace perception_module{
         }
 
 #endif
+    }
+
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::filterNearRangePoints(ScanType scan){
+        std::vector<float> &ranges=scan->ranges;
+        for(auto &range:ranges){
+            if(range < near_filter_range_){
+                range=0;
+            }
+        }
     }
 
     template <class ScanType>
@@ -194,32 +215,38 @@ namespace perception_module{
     }
 
     template<class ScanType>
-    void laser_detect_pallet<ScanType>::pubClusterPoints(ScanType &scan,const std::vector<ClusterPoint_Ptr> &clusters){
+    void laser_detect_pallet<ScanType>::pubClusterPoints(ScanType &scan,const std::vector<PalletInfo_Ptr> pallets){
         sensor_msgs::PointCloud cluster_points;
         cluster_points.header=scan->header;
-        for(const auto cluster:clusters){
-            for(const auto &point:cluster->infos){
-                cluster_points.points.emplace_back();
-                cluster_points.points.back().x=point.point.x();
-                cluster_points.points.back().y=point.point.y();
+        for(const auto pallet:pallets){
+            for(const auto cluster:pallet->points){
+                for(const auto &point:cluster->infos){
+                    cluster_points.points.emplace_back();
+                    cluster_points.points.back().x=point.point.x();
+                    cluster_points.points.back().y=point.point.y();
+                }
             }
-
         }
         clusters_pub_.publish(cluster_points);
     }
 
     template <class ScanType>
-    void laser_detect_pallet<ScanType>::pubClusterMean(ScanType &scan,const std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs){
+    void laser_detect_pallet<ScanType>::pubClusterMean(ScanType &scan,const std::vector<PalletInfo_Ptr> pallets){
         sensor_msgs::PointCloud points;
         points.header=scan->header;
-        for(const auto pair:rack_point_pairs){
+        for(const auto pallet:pallets){
             points.points.emplace_back();
-            points.points.back().x=pair.first.x();
-            points.points.back().y=pair.first.y();
+            points.points.back().x=pallet->points[0]->mean.x();
+            points.points.back().y=pallet->points[0]->mean.y();
 
             points.points.emplace_back();
-            points.points.back().x=pair.second.x();
-            points.points.back().y=pair.second.y();
+            points.points.back().x=pallet->points[1]->mean.x();
+            points.points.back().y=pallet->points[1]->mean.y();
+
+            points.points.emplace_back();
+            points.points.back().x=pallet->points[2]->mean.x();
+            points.points.back().y=pallet->points[2]->mean.y();
+
         }
 
         cluster_mean_pub_.publish(points);
@@ -259,9 +286,9 @@ namespace perception_module{
 //                LOG(INFO) << "detect pose in lidar: " << detect_pose.transpose();
                 Eigen::Vector3d dir(std::cos(detect_pose[2]), std::sin(detect_pose[2]), 0);
                 Eigen::Vector3d zero_dir(std::cos(0), std::sin(0), 0);
-//                if (dir.cross(zero_dir).norm() < angle_detect_thresh_) {
+                if (dir.cross(zero_dir).norm() < angle_detect_thresh_) {
                     detect_poses.emplace_back(detect_pose);
-//                }
+                }
             }
         }
         return detect_poses;
@@ -519,7 +546,7 @@ namespace perception_module{
             bk_clusters.push_back(curr_cluster);
             int cluster_size = clusters.size();
             for (int i = 1; i < cluster_size; ++i) {
-                if((curr_cluster->mean - clusters[i]->mean).norm()<0.05f){
+                if((curr_cluster->mean - clusters[i]->mean).norm()<0.1f){
                     for (auto &info : clusters[i]->infos) {
                         curr_cluster->infos.push_back(info);
                     }
@@ -532,6 +559,42 @@ namespace perception_module{
             clusters.swap(bk_clusters);
         }
     }
+
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::detectPose(const std::vector<ClusterPoint_Ptr> &points,std::vector<PalletInfo_Ptr>& pallets){
+        for(auto& point:points) {
+            std::vector<EdgeInfo_Ptr> edges;
+            for(auto& other_point:points) {
+                if (point != other_point) {
+                    double length = (other_point->mean - point->mean).norm();
+                    if (std::fabs(length-rack_length_) < rack_length_thresh_) {
+                        edges.emplace_back(new EdgeInfo);
+                        edges.back()->computerEdge(point, other_point);
+                    }
+                }
+            }
+            findPallet(edges, pallets);
+        }
+    }
+
+
+
+    //找到雷达5米内的所有货架信息，将货架腿位姿以直角三角形的信息存储在triangles中
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::findPallet(const std::vector<EdgeInfo_Ptr> &edges,std::vector<PalletInfo_Ptr>& pallets){
+        int size = edges.size();
+        for (int i = 0; i < size; ++i) {
+            auto& edge = edges[i];
+            for (int j = i + 1; j < size; ++j) {
+                auto& other_edge = edges[j];
+                if(edge->norm.dot(other_edge->norm) < pallet_detect_angle_thresh_) {    //dot 向量点乘
+                    pallets.emplace_back(new PalletInfo);
+                    pallets.back()->computePallet(edge, other_edge);
+                }
+            }
+        }
+    }
+
 
 
     //显式实例化

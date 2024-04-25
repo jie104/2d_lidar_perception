@@ -15,6 +15,10 @@
 #include <geometry_msgs/PoseArray.h>
 #include <sensor_msgs/PointCloud.h>
 #include "../../../devel/include/laser_perception/status.h"
+#include <numeric>
+#include <Eigen/Geometry>
+#include <Eigen/SVD>
+#include <Eigen/Eigenvalues>
 
 namespace perception_module{
 
@@ -59,6 +63,86 @@ struct ClusterPoint {
 
 typedef std::shared_ptr<ClusterPoint> ClusterPoint_Ptr;
 
+struct EdgeInfo{
+    ClusterPoint_Ptr this_cluster;
+    ClusterPoint_Ptr other_cluster;
+    Eigen::Vector2d norm;
+    float length;
+    void computerEdge(const ClusterPoint_Ptr &this_cluster,const ClusterPoint_Ptr& other_cluster){
+        norm = other_cluster->mean - this_cluster->mean;    //向量以this_cluster->mean为起点
+        this->this_cluster = this_cluster;
+        this->other_cluster = other_cluster;
+        length = norm.norm();
+        norm.normalize();
+    }
+};
+typedef std::shared_ptr<EdgeInfo> EdgeInfo_Ptr;
+
+struct PalletInfo{
+    std::vector<ClusterPoint_Ptr> points;
+    std::vector<Eigen::Vector2d> line_points;
+    ClusterPoint_Ptr left_point;
+    ClusterPoint_Ptr right_point;
+    ClusterPoint_Ptr corner_point;
+    Eigen::Vector2d mean;
+    Eigen::Vector2d direction;
+
+    void computePallet(const EdgeInfo_Ptr& edge_1,const EdgeInfo_Ptr& edge_2){
+        corner_point = edge_1->this_cluster;
+        left_point = edge_1->other_cluster;
+        right_point = edge_2->other_cluster;
+        points.clear();
+        points.push_back(corner_point);
+        points.push_back(left_point);
+        points.push_back(right_point);
+        mean = (left_point->mean + right_point->mean+corner_point->mean)/3;
+
+        line_points.clear();
+        line_points.push_back(left_point->mean);
+        line_points.push_back(right_point->mean);
+        line_points.push_back(corner_point->mean);
+        FitLine(line_points,direction);
+//        Eigen::Vector2d left_to_corner= calNormalVector(left_point->mean,corner_point->mean);
+//        Eigen::Vector2d left_to_right= calNormalVector(left_point->mean,right_point->mean);
+//        Eigen::Vector2d corner_to_right= calNormalVector(corner_point->mean,right_point->mean);
+//
+//        direction=(left_to_corner+left_to_right+corner_to_right)/3;
+//        direction.norm();
+//
+        Eigen::Vector2d detect_direction=Eigen::Vector2d (std::cos(0),std::sin(0));
+        if(direction.dot(detect_direction) <0){
+            direction=-direction;
+        }
+    }
+
+//    Eigen::Vector2d calNormalVector(Eigen::Vector2d &v1,Eigen::Vector2d &v2){
+//        return Eigen::Vector2d(v2.y()-v1.y(),v1.x()-v2.x());
+//    }
+//
+    bool FitLine(std::vector<Eigen::Matrix<double, 2, 1>>& data,Eigen::Matrix<double, 2, 1>& dir,double eps = 0.2) {
+        if (data.size() < 2) {
+            return false;
+        }
+
+        Eigen::Matrix<double, 2, 1> origin =
+                std::accumulate(data.begin(), data.end(), Eigen::Matrix<double, 2, 1>::Zero().eval()) / data.size();
+
+        Eigen::Matrix<double,3,2> Y(data.size(), 2);
+        for (int i = 0; i < data.size(); ++i) {
+            Y.row(i) = (data[i] - origin).transpose();
+        }
+
+        Eigen::JacobiSVD<Eigen::Matrix<double,3,2>> svd(Y, Eigen::ComputeFullV);
+        dir = svd.matrixV().col(1);
+        return true;
+    }
+
+
+
+
+};
+typedef std::shared_ptr<PalletInfo> PalletInfo_Ptr;
+
 
 template <class ScanType>
 class laser_detect_pallet {
@@ -101,13 +185,20 @@ public:
 
     void pubPoses(ScanType &scan,std::vector<Eigen::Vector3d> &true_poses);
 
-    void pubClusterPoints(ScanType &scan,const std::vector<ClusterPoint_Ptr> &clusters);
+    void pubClusterPoints(ScanType &scan,const std::vector<PalletInfo_Ptr> triangles);
 
-    void pubClusterMean(ScanType &scan,const std::vector<std::pair<Eigen::Vector2d,Eigen::Vector2d>> &rack_point_pairs);
+    void pubClusterMean(ScanType &scan,const std::vector<PalletInfo_Ptr> triangles);
 
     bool doReq(laser_perception::status::Request& req,laser_perception::status::Response& resp);
 
     void PubCircle(std::vector<double> &check_rack_circle,ScanType scan);
+
+    void filterNearRangePoints(ScanType scan);
+
+    void detectPose(const std::vector<ClusterPoint_Ptr> &points,std::vector<PalletInfo_Ptr>& triangles);
+
+    void findPallet(const std::vector<EdgeInfo_Ptr> &edges,std::vector<PalletInfo_Ptr>& pallets);
+
 
 private:
     void combineClusters(std::vector<ClusterPoint_Ptr> &clusters);
@@ -130,11 +221,13 @@ private:
     const double dilate_cluster_angle_offset = 1.0*M_PI/180.0;
     const double dilate_cluster_dist_thresh = 0.03;
     const double low_inten_thresh = 50;
-    const double rack_length_=2.56;  //单位m,todo:待确定
-    const double rack_length_thresh_=0.1;   //todo:待确定
+    const double rack_length_=0.44;  //单位m,todo:待确定
+    const double rack_length_thresh_=0.03;   //todo:待确定
     const double range_detect_thresh_=0.05; //单位m,todo:待确定
     const double angle_detect_thresh_=0.0871;   //对应sin5°，todo:待确定
     const int min_detect_point_num_=3;
+    const float near_filter_range_=1.0;
+    const double pallet_detect_angle_thresh_=-0.95; //约161°
 
     const int detect_count_=10; //识别次数
     int cur_count_;
