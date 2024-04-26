@@ -21,6 +21,7 @@ namespace perception_module{
         clusters_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_points",5);
         cluster_mean_pub_=node_.advertise<sensor_msgs::PointCloud>("cluster_mean",5);
         circle_pub_=node_.advertise<sensor_msgs::PointCloud>("circle_filter",5);
+        inverse_pcl_pub_=node_.advertise<sensor_msgs::LaserScan>("inverse_pcl",5);
 
         cur_detect_status_= false;
         is_detect_= false;
@@ -47,6 +48,10 @@ namespace perception_module{
             return;
         }
         LOG_EVERY_N(INFO,50) << " begin to detect!!!";
+
+        ///将激光扫描方向调换
+        reverseLidarPcl(scan);
+        pubInversePcl(scan);
 
         if(check_rack_circle_.empty()) {
             computeCircleInfo(scan);
@@ -132,6 +137,17 @@ namespace perception_module{
     }
 
     template <class ScanType>
+    void laser_detect_pallet<ScanType>::reverseLidarPcl(ScanType scan){
+        int size=scan->ranges.size();
+        std::vector<float> &ranges=scan->ranges;
+        std::vector<float> ranges_bk(size,0);
+        for(int i=0;i<size;i++){
+            ranges_bk[i]=ranges[size-i-1];
+        }
+        ranges.swap(ranges_bk);
+    }
+
+    template <class ScanType>
     void laser_detect_pallet<ScanType>::filterNearRangePoints(ScanType scan){
         std::vector<float> &ranges=scan->ranges;
         for(auto &range:ranges){
@@ -184,6 +200,14 @@ namespace perception_module{
         return detect_pose;
     }
 
+    template <class ScanType>
+    void laser_detect_pallet<ScanType>::pubInversePcl(ScanType inverse_scan){
+        sensor_msgs::LaserScan points;
+        points.header=inverse_scan->header;
+        points=*inverse_scan;
+        inverse_pcl_pub_.publish(points);
+
+    }
 
     template <class ScanType>
     void laser_detect_pallet<ScanType>::pubPose(ScanType &scan,Eigen::Vector3d &true_pose){

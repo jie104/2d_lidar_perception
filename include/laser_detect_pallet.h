@@ -199,6 +199,9 @@ public:
 
     void findPallet(const std::vector<EdgeInfo_Ptr> &edges,std::vector<PalletInfo_Ptr>& pallets);
 
+    void reverseLidarPcl(ScanType scan);
+
+    void pubInversePcl(ScanType inverse_scan);
 
 private:
     void combineClusters(std::vector<ClusterPoint_Ptr> &clusters);
@@ -239,6 +242,7 @@ private:
     ros::Publisher cluster_mean_pub_;
     ros::ServiceServer server_;
     ros::Publisher circle_pub_;
+    ros::Publisher inverse_pcl_pub_;
 
     InstallPara install_para_;
 
